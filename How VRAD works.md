@@ -1,6 +1,6 @@
 # BSP format
 
-The following is the VDC information on the BSP lighting lump:
+The following is the [VDC information on the BSP lighting lump](https://developer.valvesoftware.com/wiki/Source_BSP_File_Format#Lighting):
 
 > The lighting lump (Lump 8) is used to store the static lightmap samples of map faces. Each lightmap sample is a colour tint that multiplies the colours of the underlying texture pixels, to produce lighting of varying intensity. These lightmaps are created during the VRAD phase of map compilation and are referenced from the `dface_t` structure. The current lighting lump version is 1.
 > Each `dface_t` may have a up to four lightstyles defined in its `styles[]` array (which contains `255` to represent no lightstyle). The number of luxels in each direction of the face is given by the two `LightmapTextureSizeInLuxels[]` members (plus 1), and the total number of luxels per face is thus:
@@ -8,7 +8,7 @@ The following is the VDC information on the BSP lighting lump:
 ```
 (LightmapTextureSizeInLuxels[0] + 1) * (LightmapTextureSizeInLuxels[1] + 1)
 ```
- 
+
 > Each face gives a byte offset into the lighting lump in its `lightofs` member (if no lighting information is used for this face e.g. faces with skybox, nodraw and invisible textures, `lightofs` is `-1`.) There are `(number of lightstyles)*(number of luxels)` lightmap samples for each face, where each sample is a 4-byte `ColorRGBExp32` structure:
 
 ```
@@ -40,6 +40,14 @@ n-16        n-12        n-8         n-4         n           n+4         n+8
 |Avg Sample3|Avg Sample2|Avg Sample1|Avg Sample0|  Sample0  |  Sample1  |  ...
                                                 ^ Lightofs indexes to here
 ```
+
+# VRAD Internals
+
+The Black Mesa mod crew have made some modifications to VRAD for their own use, and [the forum page](https://forums.blackmesasource.com/index.php/Thread/28869-Texture-Lights-and-Bounce-lighting-in-VRAD/) detailing the new commands helps shed some light (ha ha) on some of the concepts involved in the simulation:
+
+> Vrad "chops" the bsp surfaces into "patches" that get the calculated lighting. The patches act as the pixels of the light map so to speak. Vrad chops up surfaces according to the lightmap size, set in hammer. Vrad takes the light brightness values from each patch, and raytraces that data to every other patch in a large huge matrix; also using fancy physics based falloff calculations. When texture lights are used, these patches are set to be bright, and give off light.
+>
+> By default, vrad is set to ignore the chopping of surfaces that have flagged unlit materials. It is set this way to save compile time, because surfaces that don't receive lighting (such as nodraw and water, etc.) don't need to have detailed lightmaps.
 
 # Core Algorithm
 
