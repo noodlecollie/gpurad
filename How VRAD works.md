@@ -41,13 +41,38 @@ n-16        n-12        n-8         n-4         n           n+4         n+8
                                                 ^ Lightofs indexes to here
 ```
 
-# VRAD Internals
+# Glossary
+Some of the terms and concepts used within the VRAD simulation are as follows:
 
-The Black Mesa mod crew have made some modifications to VRAD for their own use, and [the forum page](https://forums.blackmesasource.com/index.php/Thread/28869-Texture-Lights-and-Bounce-lighting-in-VRAD/) detailing the new commands helps shed some light (ha ha) on some of the concepts involved in the simulation:
+## Macro Texture
+`macro_texture.h` provides some information:
 
-> Vrad "chops" the bsp surfaces into "patches" that get the calculated lighting. The patches act as the pixels of the light map so to speak. Vrad chops up surfaces according to the lightmap size, set in hammer. Vrad takes the light brightness values from each patch, and raytraces that data to every other patch in a large huge matrix; also using fancy physics based falloff calculations. When texture lights are used, these patches are set to be bright, and give off light.
+> The macro texture looks for a TGA file with the same name as the BSP file and in the same directory. If it finds one, it maps this texture onto the world dimensions (in the worldspawn entity) and masks all lightmaps with it.
+
+From `SampleMacroTexture()`, the world position is used to sample the macro texture. On the X and Y axes, a position of `world_mins` corresponds to texture pixel `0`, and a position of `world_maxs` corresponds to texture pixel `dimension-1`. It is assumed that the texture dimensions begin from the upper left.
+
+Once the texture sample location is computed, the alpha value from the texture is used in `ApplyMacroTextures()` to mask the colour of a given luxel. A value of `255` in the texture corresponds to no masking, whereas a value of `0` corresponds to complete masking (ie. an output of `[0 0 0]`).
+
+## Patch
+**TODO:** What's the difference between a "patch" and a "sample"?
+
+[This Black Mesa forum post](https://forums.blackmesasource.com/index.php/Thread/28869-Texture-Lights-and-Bounce-lighting-in-VRAD/) gives an overview of how VRAD works, within the context of giving the program new lighting parameters:
+
+> VRAD "chops" the BSP surfaces into "patches" that get the calculated lighting. The patches act as the pixels of the light map, so to speak. VRAD chops up surfaces according to the lightmap size set in Hammer, takes the light brightness values from each patch, and raytraces that data to every other patch in a huge matrix, using fancy physics based falloff calculations. When texture lights are used, these patches are set to be bright, and give off light.
 >
-> By default, vrad is set to ignore the chopping of surfaces that have flagged unlit materials. It is set this way to save compile time, because surfaces that don't receive lighting (such as nodraw and water, etc.) don't need to have detailed lightmaps.
+> By default, VRAD is set to ignore the chopping of surfaces that have flagged unlit materials. It is set this way to save compile time, because surfaces that don't receive lighting (such as nodraw and water, etc.) don't need to have detailed lightmaps.
+
+As per the `CPatch` definition, each patch has a single parent and a maximum of two children. This implies that patches are structured in a binary tree. It is normal within code to see patches be excluded from lighting simulations if they are not leaves (ie. if they have any children).
+
+Some insightful uses of patches within the code (with function signatures modified for readability) are:
+
+* `CreateDirectLights()` *(lightmap.cpp:1541)*
+
+    If the amount of light emitted by a patch is greater than a given threshold, a *direct light* is created for the patch. This is used for textures that should emit light, where each patch on the surface of the textured face corresponds to a source of light.
+
+* `AddSampleToPatch(sample, light, faceNumber)` *(lightmap.cpp:2060)*
+
+    All patches that belong to the specified face are iterated over. For each leaf patch, its `samplelight` value is increased if the given sample is determined to fall within the bounds of the patch. The colour and intensity of the accumulated light is provided by the `light` function argument, and this is multiplied by the amount of surface area the sample covers.
 
 # Core Algorithm
 
@@ -55,7 +80,7 @@ The actual VRAD logic begins in `RunVRAD()`, though the heavy lifting mostly hap
 
 ```
 Load the BSP.
-Initialise a macro texture. (TODO: What's this?)
+Initialise the macro texture.
 
 If performing incremental light simulation:
     Prepare for incremental lighting.
@@ -94,7 +119,7 @@ VRAD is pretty much written in C-style C++, so it's not as easy as it could be t
 
 ##  dworldlight_t *(bspfile.h:966)*
 
-Seems to represent a light in the BSP, as opposed to a light in VRAD. The difference is that VRAD lights contain references to simulation-specific information, which would be irrelevant to the game engine.
+Seems to represent a light in the BSP, as opposed to a light in VRAD. The difference is that VRAD lights contain references to simulation-specific information, which would be irrelevant to the game engine. *(TODO: Confirm this inference is valid.)*
 
 ```c++
 struct dworldlight_t
@@ -181,7 +206,7 @@ struct directlight_t
 
 ## CPatch *(vrad.h:186)*
 
-Not entirely sure what a patch is, but my best guess is that it's VRAD's internal luxel-based representation of a face.
+As described on the Black Mesa forum page, a patch represents "a pixel of the light map". It looks like a given face is divided up into many patches, and each patch corresponds to some kind of "cell" that accumulates light.
 
 ```c++
 struct CPatch
