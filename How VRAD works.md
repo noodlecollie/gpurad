@@ -1,82 +1,6 @@
-# BSP format
-
-The following is the [VDC information on the BSP lighting lump](https://developer.valvesoftware.com/wiki/Source_BSP_File_Format#Lighting):
-
-> The lighting lump (Lump 8) is used to store the static lightmap samples of map faces. Each lightmap sample is a colour tint that multiplies the colours of the underlying texture pixels, to produce lighting of varying intensity. These lightmaps are created during the VRAD phase of map compilation and are referenced from the `dface_t` structure. The current lighting lump version is 1.
-> Each `dface_t` may have a up to four lightstyles defined in its `styles[]` array (which contains `255` to represent no lightstyle). The number of luxels in each direction of the face is given by the two `LightmapTextureSizeInLuxels[]` members (plus 1), and the total number of luxels per face is thus:
-
-```
-(LightmapTextureSizeInLuxels[0] + 1) * (LightmapTextureSizeInLuxels[1] + 1)
-```
-
-> Each face gives a byte offset into the lighting lump in its `lightofs` member (if no lighting information is used for this face e.g. faces with skybox, nodraw and invisible textures, `lightofs` is `-1`.) There are `(number of lightstyles)*(number of luxels)` lightmap samples for each face, where each sample is a 4-byte `ColorRGBExp32` structure:
-
-```
-struct ColorRGBExp32
-{
-    byte r, g, b;
-    signed char exponent;
-};
-```
-
-> Standard RGB format can be obtained from this by multiplying each colour component by `2^(exponent)`. For faces with bumpmapped textures, there are four times the usual number of lightmap samples, presumably containing samples used to compute the bumpmapping.
-> Immediately preceeding the lightofs-referenced sample group, there are single samples containing the average lighting on the face, one for each lightstyle, in reverse order from that given in the `styles[]` array.
-> Version 20 BSP files contain a second, identically sized lighting lump (Lump 53). This is presumed to store more accurate (higher-precision) HDR data for each lightmap sample. The format is currently unknown, but is also 32 bits per sample.
-> The maximum size of the lighting lump is `0x1000000` bytes, i.e. 16 Mb (`MAX_MAP_LIGHTING`).
-
-The data format can therefore be thought of as being laid out in the following way:
-
-```
-Sample             : 4 bytes
-Lightstyles        : 4
-Luxels             : 17x17 = 289
-Samples            : 289 x 4 = 1156
-Samples occupy     : 4624 bytes
-Avg samples        : 4
-Avg samples occupy : 16 bytes
-Lightofs           : n
-
-n-16        n-12        n-8         n-4         n           n+4         n+8
-|Avg Sample3|Avg Sample2|Avg Sample1|Avg Sample0|  Sample0  |  Sample1  |  ...
-                                                ^ Lightofs indexes to here
-```
-
-# Glossary
-Some of the terms and concepts used within the VRAD simulation are as follows:
-
-## Macro Texture
-`macro_texture.h` provides some information:
-
-> The macro texture looks for a TGA file with the same name as the BSP file and in the same directory. If it finds one, it maps this texture onto the world dimensions (in the worldspawn entity) and masks all lightmaps with it.
-
-From `SampleMacroTexture()`, the world position is used to sample the macro texture. On the X and Y axes, a position of `world_mins` corresponds to texture pixel `0`, and a position of `world_maxs` corresponds to texture pixel `dimension-1`. It is assumed that the texture dimensions begin from the upper left.
-
-Once the texture sample location is computed, the alpha value from the texture is used in `ApplyMacroTextures()` to mask the colour of a given luxel. A value of `255` in the texture corresponds to no masking, whereas a value of `0` corresponds to complete masking (ie. an output of `[0 0 0]`).
-
-## Patch
-**TODO:** What's the difference between a "patch" and a "sample"?
-
-[This Black Mesa forum post](https://forums.blackmesasource.com/index.php/Thread/28869-Texture-Lights-and-Bounce-lighting-in-VRAD/) gives an overview of how VRAD works, within the context of giving the program new lighting parameters:
-
-> VRAD "chops" the BSP surfaces into "patches" that get the calculated lighting. The patches act as the pixels of the light map, so to speak. VRAD chops up surfaces according to the lightmap size set in Hammer, takes the light brightness values from each patch, and raytraces that data to every other patch in a huge matrix, using fancy physics based falloff calculations. When texture lights are used, these patches are set to be bright, and give off light.
->
-> By default, VRAD is set to ignore the chopping of surfaces that have flagged unlit materials. It is set this way to save compile time, because surfaces that don't receive lighting (such as nodraw and water, etc.) don't need to have detailed lightmaps.
-
-As per the `CPatch` definition, each patch has a single parent and a maximum of two children. This implies that patches are structured in a binary tree. It is normal within code to see patches be excluded from lighting simulations if they are not leaves (ie. if they have any children).
-
-Some insightful uses of patches within the code (with function signatures modified for readability) are:
-
-* `CreateDirectLights()` *(lightmap.cpp:1541)*
-
-    If the amount of light emitted by a patch is greater than a given threshold, a *direct light* is created for the patch. This is used for textures that should emit light, where each patch on the surface of the textured face corresponds to a source of light.
-
-* `AddSampleToPatch(sample, light, faceNumber)` *(lightmap.cpp:2060)*
-
-    All patches that belong to the specified face are iterated over. For each leaf patch, its `samplelight` value is increased if the given sample is determined to fall within the bounds of the patch. The colour and intensity of the accumulated light is provided by the `light` function argument, and this is multiplied by the amount of surface area the sample covers.
-
 # Core Algorithm
 
-The actual VRAD logic begins in `RunVRAD()`, though the heavy lifting mostly happens one level lower in `RadWorld_Go()`. The summary of the non-MPI process, assuming all lighting features are requested, is as follows:
+To light a level, VRAD logic begins in `RunVRAD()`, though the heavy lifting mostly happens one level lower in `RadWorld_Go()`. The summary of the non-MPI process, assuming all lighting features are requested, is as follows:
 
 ```
 Load the BSP.
@@ -111,6 +35,76 @@ If computing static prop lighting:
 
 Write results out to BSP.
 ```
+# Definitions
+Some of the terms and concepts used within the VRAD simulation are as follows:
+
+## Chop
+The following definitions are made within the code:
+
+* `maxchop`: Coarsest allowed number of luxel widths for a patch.
+* `minchop`: Tightest number of luxel widths for a patch, used on edges.
+
+## Macro Texture
+`macro_texture.h` provides some information:
+
+> The macro texture looks for a TGA file with the same name as the BSP file and in the same directory. If it finds one, it maps this texture onto the world dimensions (in the worldspawn entity) and masks all lightmaps with it.
+
+From `SampleMacroTexture()`, the world position is used to sample the macro texture. On the X and Y axes, a position of `world_mins` corresponds to texture pixel `0`, and a position of `world_maxs` corresponds to texture pixel `dimension-1`. It is assumed that the texture dimensions begin from the upper left.
+
+Once the texture sample location is computed, the alpha value from the texture is used in `ApplyMacroTextures()` to mask the colour of a given luxel. A value of `255` in the texture corresponds to no masking, whereas a value of `0` corresponds to complete masking (ie. an output of `[0 0 0]`).
+
+## Patch
+[This Black Mesa forum post](https://forums.blackmesasource.com/index.php/Thread/28869-Texture-Lights-and-Bounce-lighting-in-VRAD/) gives an overview of how VRAD works, within the context of giving the program new lighting parameters:
+
+> VRAD "chops" the BSP surfaces into "patches" that get the calculated lighting. The patches act as the pixels of the light map, so to speak. VRAD chops up surfaces according to the lightmap size set in Hammer, takes the light brightness values from each patch, and raytraces that data to every other patch in a huge matrix, using fancy physics based falloff calculations. When texture lights are used, these patches are set to be bright, and give off light.
+>
+> By default, VRAD is set to ignore the chopping of surfaces that have flagged unlit materials. It is set this way to save compile time, because surfaces that don't receive lighting (such as nodraw and water, etc.) don't need to have detailed lightmaps.
+
+As per the `CPatch` definition, each patch has a single parent and a maximum of two children. This implies that patches are structured in a binary tree. It is normal within code to see patches be excluded from lighting simulations if they are not leaves (ie. if they have any children).
+
+Patches are different
+
+Some insightful uses of patches within the code (with function signatures modified for readability) are:
+
+* `MakePatchForFace(faceNumber, winding)` *(vrad.cpp:534)*
+
+    Called by `MakePatches()`. The face begins by having a single patch created, and the chop scale is computed according to the texture scale and is stored in the patch's `luxscale`. The patch's `chop` value, however, is just set to `maxchop`.
+
+* `CreateChildPatch(parentIndex, winding, area, centre)` *(vrad.cpp:767)*
+
+    **TODO: Complete this description.**
+
+* `CreateDirectLights()` *(lightmap.cpp:1541)*
+
+    If the amount of light emitted by a patch is greater than a given threshold, a *direct light* is created for the patch. This is used for textures that should emit light, where each patch on the surface of the textured face corresponds to a source of light.
+
+* `AddSampleToPatch(sample, light, faceNumber)` *(lightmap.cpp:2060)*
+
+    All patches that belong to the specified face are iterated over. For each leaf patch, its `samplelight` value is increased if the given sample is determined to fall within the bounds of the patch. The colour and intensity of the accumulated light is provided by the `light` function argument, and this is multiplied by the amount of surface area the sample covers.
+
+* `BuildPatchLights(faceNumber)` *(lightmap.cpp:3196)*
+
+    This function calls `AddSampleToPatch()` as above for each sample on the face, using the sample number to index into the `facelight_t` structure for the given face. It then adjusts the accumulated light values so that parent patches reflect the sum of the values of their children. After this, it averages patch lighting according to area, and transfers `totallight` into `directlight`.
+
+## Sample
+A face is cut into samples, which have a position, normal and area. There are as many samples on a face as there are luxels. Samples don't seem to actually store light information - this is what a patch is for.
+
+In code, samples are relevant in the following areas:
+
+* `BuildFacesamples(lightInfo, faceLight)` *(lightmap.cpp:650)*
+
+    Splits a face up into samples, along the lightmap splitting axes (which are in luxel space). There are `luxelsOnS * luxelsOnT` samples created. The world position of each sample is stored within it.
+
+* `AddSampleToPatch(sample, light, faceNumber)` *(lightmap.cpp:2060)*
+
+    Same purpose as described within the definition for a patch.
+        
+* `SupersampleLightAtPoint(lightInfo, sampleInfo, sampleIndex, lightStyleIndex,`
+    `lightingValue, flags)` *(lightmap.cpp:2683)*
+
+    Given a sample index, computes new sample points and normals, and recalculates the lighting for the lightingValue passed in.
+
+## Lighting Value
 
 
 # VRAD Data Structures
@@ -278,4 +272,46 @@ struct CPatch
     short indices[3];           // Valve: "Displacement use these for subdivision." Power of 2
                                 // to subdivide the patch in eaxh axis?
 };
+```
+# BSP format
+
+The following is the [VDC information on the BSP lighting lump](https://developer.valvesoftware.com/wiki/Source_BSP_File_Format#Lighting):
+
+> The lighting lump (Lump 8) is used to store the static lightmap samples of map faces. Each lightmap sample is a colour tint that multiplies the colours of the underlying texture pixels, to produce lighting of varying intensity. These lightmaps are created during the VRAD phase of map compilation and are referenced from the `dface_t` structure. The current lighting lump version is 1.
+> Each `dface_t` may have a up to four lightstyles defined in its `styles[]` array (which contains `255` to represent no lightstyle). The number of luxels in each direction of the face is given by the two `LightmapTextureSizeInLuxels[]` members (plus 1), and the total number of luxels per face is thus:
+
+```
+(LightmapTextureSizeInLuxels[0] + 1) * (LightmapTextureSizeInLuxels[1] + 1)
+```
+
+> Each face gives a byte offset into the lighting lump in its `lightofs` member (if no lighting information is used for this face e.g. faces with skybox, nodraw and invisible textures, `lightofs` is `-1`.) There are `(number of lightstyles)*(number of luxels)` lightmap samples for each face, where each sample is a 4-byte `ColorRGBExp32` structure:
+
+```
+struct ColorRGBExp32
+{
+    byte r, g, b;
+    signed char exponent;
+};
+```
+
+> Standard RGB format can be obtained from this by multiplying each colour component by `2^(exponent)`. For faces with bumpmapped textures, there are four times the usual number of lightmap samples, presumably containing samples used to compute the bumpmapping.
+> Immediately preceeding the lightofs-referenced sample group, there are single samples containing the average lighting on the face, one for each lightstyle, in reverse order from that given in the `styles[]` array.
+> Version 20 BSP files contain a second, identically sized lighting lump (Lump 53). This is presumed to store more accurate (higher-precision) HDR data for each lightmap sample. The format is currently unknown, but is also 32 bits per sample.
+> The maximum size of the lighting lump is `0x1000000` bytes, i.e. 16 Mb (`MAX_MAP_LIGHTING`).
+
+The data format can therefore be thought of as being laid out in the following way:
+
+```
+Sample             : 4 bytes
+Lightstyles        : 4
+Luxels             : 17x17 = 289
+Samples            : 289 x 4 = 1156
+Samples occupy     : 4624 bytes
+Avg samples        : 4
+Avg samples occupy : 16 bytes
+Lightofs           : n
+
+n-16        n-12        n-8         n-4         n           n+4         n+8
+|Avg Sample3|Avg Sample2|Avg Sample1|Avg Sample0|  Sample0  |  Sample1  |  ...
+                                                ^ Lightofs indexes to here
 ```
