@@ -1,9 +1,42 @@
+#Introduction
+
+The documents present in the `documentation` folder of the repository provide some background information and technical details about radiosity simulation. To summarise the important points, radiosity algorithms generally proceed by dividing up the scene into "patches", where a patch is an area with a uniform illumination. Within the context of the Source engine and VRAD, patches can be considered "pixels" in a level's lightmap, and correspond to "luxels" on a face.
+
+It should be noted that in certain algorithms, patches are subdivided (ie. split up into smaller parts) where it can be determined that the increased density is desirable. For example, to have a sharper, less blocky shadow cast on a surface, that surface should be divided up into more patches.
+
+For `n` patches, the radiosity of patch `i` can be given as follows:
+
+```
+Bi = Ei + Pi * SUMj(Bj * Fij)
+```
+
+* `Bi` is the radiosity of patch `i`, where `i` is between `1` and `n`.
+* `Ei` is the emissivity of patch `i`, ie. how much light the patch gives off.
+* `Pi` is the reflectivity of patch `i`, ie. how much light the patch reflects. This is a vector of values between `0` and `1`.
+* `SUMj()` is the sum of the terms for all `j`, where `j` is some other patch from `1` to `n`.
+* `Bj` is the radiosity of patch `j`.
+* `Fij` is the "form factor". This is a measure of the proportion of light emitted from patch `j` that reaches patch `i`, as a value between `0` and `1`.
+
+Each term apart from `Fij` can be represented as a 3-dimensional vector, representing an RGB colour where each term is between `0` and `1`. `Fij` is just used as a multiplier to reduce the contribution of the radiosity from patch `j`. `Pj` can similarly be considered a vector of multipliers for each of the R, G and B elements of the result of the sum.
+
+Combining the equations of all of the patches into a single matrix, the radiosity of each patch can be computed iteratively (see documentation). This, however, occupies a lot of space in memory (which can slow things down if hard disk paging has to occur) and makes it difficult to preview things: if you want to see the results, you have to run the algorithm all the way through to completion.
+
+The "Progressive Refinement" method allows a partial run of the algorithm to be displayed and then for subsequent runs to "refine" the result. This works by "shooting" the light from the patch with the most radiosity in each run, which over a small number of runs will give a rough approximation of the lighting as a whole. Many more iterations are required in order to correctly compute the subtler details of the illumination.
+
+Memory-wise, the matrix method uses an amount of memory that is an order of magnitude larger than (ie. the square of) the memory used by progressive refinement. This means that by using the latter method, much more complex scenes can be computed with the same amount of RAM.
+
 # Core Algorithm
 
 To light a level, VRAD logic begins in `RunVRAD()`, though the heavy lifting mostly happens one level lower in `RadWorld_Go()`. The summary of the non-MPI process, assuming all lighting features are requested, is as follows:
 
 ```
-Load the BSP.
+Load the BSP and other resources, eg. lights.rad
+Initialise various data structures.
+
+Make a single patch for each face.
+Recursively subdivide each patch int children, until the children are smaller
+    than the chop size in all axes.
+
 Initialise the macro texture.
 
 If performing incremental light simulation:
