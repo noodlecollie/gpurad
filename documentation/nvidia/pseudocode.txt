@@ -1,0 +1,20 @@
+initialize shooter residual E
+
+while not converged
+{
+	render scene from POV of shooter
+
+	for each receiving element
+	{
+		if element is visible
+		{
+			compute form factor FF
+			E =  * FF * E
+			add E to residual texture
+			add E to radiosity texture
+		}
+	}
+
+	shooter's residual E = 0
+	compute next shooter
+}
